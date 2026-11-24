@@ -19,7 +19,7 @@ internal sealed class MainForm : Form
     private static readonly string[] Suffix = { "原版排版", "可编辑", "识别文字" };
     private static readonly string[] Hints = {
         "每页按原尺寸嵌入高清图片，保留字体、图章和表格位置。页内文字作为图片保存。",
-        "用桌面版 Microsoft Word 还原文字和表格。适合可选中文字的 PDF，复杂版面可能重新分页。",
+        "按原稿的表格线和文字位置重建可填写的单元格。其他版面调用桌面版 Microsoft Word 转换。",
         "用 Windows OCR 将扫描页识别为可编辑文字。表格和印章需对照原件，数字与标点建议校对。"
     };
 
@@ -144,7 +144,7 @@ internal sealed class MainForm : Form
             string target=dialog.FileName;
             SetBusy(true); bar.Value=0;
             bar.Style=index==1?ProgressBarStyle.Marquee:ProgressBarStyle.Continuous;
-            status.Text=index==1?"正在调用 Word 识别版面…":"正在读取页面…";
+            status.Text=index==1?"正在识别表格线和文字位置…":"正在读取页面…";
             var progress = new Progress<Tuple<int,int>>(p=>{
                 bar.Value=(int)((long)p.Item1*100/p.Item2);
                 status.Text="已处理 "+p.Item1+" / "+p.Item2+" 页";

@@ -29,7 +29,10 @@ internal static class Converter
             {
                 case "fixed": report = await FixedPages.ConvertAsync(input,temp,password,dpi,progress); break;
                 case "ocr": report = await OcrText.ConvertAsync(input,temp,password,progress); break;
-                case "edit": report = await WordAsync(input,temp); break;
+                case "edit":
+                    report = RuledForms.TryConvert(input,temp,progress);
+                    if (report==null) report = await WordAsync(input,temp);
+                    break;
                 default: throw new ArgumentException("模式须为 fixed、edit 或 ocr。");
             }
             using (var zip = ZipFile.OpenRead(temp))
@@ -91,7 +94,7 @@ internal static class Converter
                 var chars = doc.Descendants(w+"t").Sum(t=>t.Value.Trim().Length);
                 var tables = doc.Descendants(w+"tbl").Count();
                 return chars==0 ? "Word 未提取到可编辑文字。扫描页如需改字，请选择「扫描文字识别」。" :
-                    "正文 XML 中有 "+chars+" 个文字字符、"+tables+" 个 Word 表格。请对照原稿检查分页与表格。";
+                    "已通过桌面版 Word 重排，正文有 "+chars+" 个文字字符、"+tables+" 张表格。请对照原稿检查分页与合并单元格。";
             }
         }
         finally { if (File.Exists(script)) File.Delete(script); }

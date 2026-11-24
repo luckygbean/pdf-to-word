@@ -1,3 +1,6 @@
-# Local release builds
+# Compiler output and verified PDFium/Windows SDK build cache
 /bin/
 /obj/
+
+# Local Python regression-test bytecode
+/tests/__pycache__/

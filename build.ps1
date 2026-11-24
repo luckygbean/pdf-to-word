@@ -17,6 +17,11 @@ $null = New-Item -ItemType Directory -Force -Path $OutputDirectory
 $exe = Join-Path $OutputDirectory 'PDFtoWord.exe'
 $sources = Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src') -Filter '*.cs' | ForEach-Object FullName
 $scriptResource = Join-Path $PSScriptRoot 'src/editable.ps1'
-& (Join-Path $framework 'csc.exe') /nologo /codepage:65001 /optimize+ /target:winexe /platform:x64 "/win32manifest:$PSScriptRoot/app.manifest" "/out:$exe" "/resource:$scriptResource,editable.ps1" $refs $sources
+$pdfiumDirectory = Join-Path $PSScriptRoot 'obj/pdfium'
+& (Join-Path $PSScriptRoot 'tools/prepare-pdfium.ps1') -OutputDirectory $pdfiumDirectory
+$resources = @("/resource:$scriptResource,editable.ps1",
+    "/resource:$pdfiumDirectory/pdfium.dll,pdfium.dll",
+    "/resource:$pdfiumDirectory/PDFium-NOTICES.txt,pdfium.NOTICES.txt")
+& (Join-Path $framework 'csc.exe') /nologo /codepage:65001 /optimize+ /target:winexe /platform:x64 "/win32manifest:$PSScriptRoot/app.manifest" "/out:$exe" $resources $refs $sources
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 Write-Output $exe
