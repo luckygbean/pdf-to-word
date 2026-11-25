@@ -9,7 +9,7 @@ using System.Xml.Linq;
 
 // Rebuild the ruled form as ordinary Word tables and paragraphs. Page and cell
 // positions are measured from the PDF; Word never has to infer a merged boundary.
-internal sealed class RuledWord : IDisposable
+internal sealed partial class RuledWord : IDisposable
 {
     private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private static readonly XNamespace V = "urn:schemas-microsoft-com:vml";
@@ -44,6 +44,7 @@ internal sealed class RuledWord : IDisposable
             xml.WriteAttributeString("xmlns","r",null,R.NamespaceName);
             xml.WriteStartElement("w","body",W.NamespaceName);
             relationships.Add(Relationship("settings","settings","settings.xml"));
+            relationships.Add(Relationship("styles","styles","styles.xml"));
         }
         catch { Dispose(); throw; }
     }
@@ -103,6 +104,7 @@ internal sealed class RuledWord : IDisposable
     private XElement Run(LayoutLine line)
     {
         string font=String.IsNullOrWhiteSpace(line.FontName)?"SimSun":line.FontName;
+        RememberFont(font,line.Text,line.Bold);
         int size=Math.Max(2,(int)Math.Round(2*line.FontSize));
         var style=new XElement(W+"rPr",
             new XElement(W+"rFonts",At("ascii",font),At("hAnsi",font),At("eastAsia",font),At("cs",font)),
@@ -313,6 +315,25 @@ internal sealed class RuledWord : IDisposable
             new XAttribute("Target",target));
     }
 
+    // Empty cells and paragraph marks have no text run from which Word can
+    // infer a font. Define their style in the package, including the formatting
+    // for text typed later, independent of the user's Normal template.
+    private static XElement Styles()
+    {
+        var runDefaults=new XElement(W+"rPr",
+            new XElement(W+"rFonts",At("ascii","Times New Roman"),At("hAnsi","Times New Roman"),
+                At("eastAsia","SimSun"),At("cs","Times New Roman")),
+            Val("sz",20),Val("szCs",20),
+            new XElement(W+"lang",At("val","en-US"),At("eastAsia","zh-CN")));
+        var paragraphDefaults=new XElement(W+"pPr",
+            Val("widowControl",0),Val("autoSpaceDE",0),Val("autoSpaceDN",0),Val("snapToGrid",0),
+            new XElement(W+"spacing",At("before",0),At("after",0),At("line",240),At("lineRule","auto")));
+        return new XElement(W+"styles",
+            new XElement(W+"docDefaults",new XElement(W+"rPrDefault",runDefaults),
+                new XElement(W+"pPrDefault",paragraphDefaults)),
+            new XElement(W+"style",At("type","paragraph"),At("default",1),At("styleId","Normal"),Val("name","Normal")));
+    }
+
     internal void AddNative(LayoutPage page,Stream cleanBackgroundPng=null)
     {
         AddPage(page,cleanBackgroundPng,true);
@@ -355,15 +376,22 @@ internal sealed class RuledWord : IDisposable
         xml.Flush();
         documentPart.Position=0;
         using(var entry=archive.CreateEntry("word/document.xml").Open()) documentPart.CopyTo(entry);
-        Part(archive,"word/settings.xml",new XElement(W+"settings",new XElement(W+"compat",
+        Part(archive,"word/styles.xml",Styles());
+        bool embedded=WriteFontTable();
+        Part(archive,"word/settings.xml",new XElement(W+"settings",
+            Val("view","print"),
+            embedded?new XElement(W+"embedTrueTypeFonts"):null,embedded?new XElement(W+"saveSubsetFonts"):null,new XElement(W+"compat",
             new XElement(W+"compatSetting",At("name","compatibilityMode"),At("uri","http://schemas.microsoft.com/office/word"),At("val",15))),
             new XElement(W+"doNotAutoCompressPictures")));
         Part(archive,"word/_rels/document.xml.rels",relationships);
         Part(archive,"_rels/.rels",new XElement(Rel+"Relationships",Relationship("main","officeDocument","word/document.xml")));
         Part(archive,"[Content_Types].xml",new XElement(Ct+"Types",
+            embedded?new XElement(Ct+"Default",new XAttribute("Extension","odttf"),new XAttribute("ContentType","application/vnd.openxmlformats-officedocument.obfuscatedFont")):null,
+            new XElement(Ct+"Override",new XAttribute("PartName","/word/fontTable.xml"),new XAttribute("ContentType","application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml")),
             new XElement(Ct+"Default",new XAttribute("Extension","rels"),new XAttribute("ContentType","application/vnd.openxmlformats-package.relationships+xml")),
             new XElement(Ct+"Default",new XAttribute("Extension","png"),new XAttribute("ContentType","image/png")),
             new XElement(Ct+"Override",new XAttribute("PartName","/word/document.xml"),new XAttribute("ContentType","application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml")),
+            new XElement(Ct+"Override",new XAttribute("PartName","/word/styles.xml"),new XAttribute("ContentType","application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml")),
             new XElement(Ct+"Override",new XAttribute("PartName","/word/settings.xml"),new XAttribute("ContentType","application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"))));
         complete=true;
     }

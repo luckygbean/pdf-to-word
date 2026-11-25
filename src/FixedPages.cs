@@ -116,6 +116,7 @@ internal static class FixedPages
             Xml(zip,"word/document.xml",new XElement(W+"document",new XAttribute(XNamespace.Xmlns+"w",W),new XAttribute(XNamespace.Xmlns+"wp",Wp),
                 new XAttribute(XNamespace.Xmlns+"a",A),new XAttribute(XNamespace.Xmlns+"pic",Pic),new XAttribute(XNamespace.Xmlns+"r",R),body));
             Xml(zip,"word/settings.xml",new XElement(W+"settings",
+                new XElement(W+"view",new XAttribute(W+"val","print")),
                 new XElement(W+"compat",new XElement(W+"compatSetting",new XAttribute(W+"name","compatibilityMode"),new XAttribute(W+"uri","http://schemas.microsoft.com/office/word"),new XAttribute(W+"val",15))),
                 new XElement(W+"doNotAutoCompressPictures")));
             Xml(zip,"word/_rels/document.xml.rels",rels);

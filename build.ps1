@@ -13,6 +13,7 @@ $refs = @('System.Runtime.dll','System.Runtime.InteropServices.WindowsRuntime.dl
     'System.Collections.dll','System.ObjectModel.dll','System.Threading.Tasks.dll','System.IO.Compression.dll','System.IO.Compression.FileSystem.dll','System.Windows.Forms.dll','System.Drawing.dll','System.Xml.Linq.dll') |
     ForEach-Object { '/reference:' + (Join-Path $framework $_) }
 $refs += '/reference:' + (Resolve-Path -LiteralPath $WindowsMetadata).Path
+$refs += @('PresentationCore.dll','WindowsBase.dll') | ForEach-Object { '/reference:' + (Join-Path $framework "WPF/$_") }
 $null = New-Item -ItemType Directory -Force -Path $OutputDirectory
 $exe = Join-Path $OutputDirectory 'PDFtoWord.exe'
 $sources = Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src') -Filter '*.cs' | ForEach-Object FullName

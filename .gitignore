@@ -4,3 +4,7 @@
 
 # Local Python regression-test bytecode
 /tests/__pycache__/
+
+# IntelliJ IDEA generates its folder/module metadata for this script-built project.
+/.idea/
+/pdfword.iml
