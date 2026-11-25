@@ -7,7 +7,15 @@ internal sealed class LayoutPage
     internal List<LayoutLine> Lines = new List<LayoutLine>();
     internal List<LayoutRule> Rules = new List<LayoutRule>();
     internal List<RuledTable> Tables = new List<RuledTable>();
+    // Foreground stamp images in PDF paint order, behind-to-front.
+    internal List<LayoutStamp> Stamps = new List<LayoutStamp>();
     internal int TableCount, CellCount;
+}
+
+internal sealed class LayoutStamp
+{
+    internal double Left, Top, Width, Height;
+    internal byte[] Png;
 }
 
 internal sealed class LayoutLine
@@ -16,6 +24,7 @@ internal sealed class LayoutLine
     internal double InkLeft, InkRight;
     internal string Text, FontName;
     internal bool Bold;
+    internal int? InkGray;
     internal int LinkPage; // One-based internal destination, zero for ordinary text.
 }
 

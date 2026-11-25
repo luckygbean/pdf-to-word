@@ -15,6 +15,9 @@
 /outputs/
 /.env
 /.env.local
+# Local certificate/key bundles used with signed PDF test inputs
+*.pfx
+*.p12
 
 # IntelliJ IDEA generates its folder/module metadata for this script-built project.
 /.idea/

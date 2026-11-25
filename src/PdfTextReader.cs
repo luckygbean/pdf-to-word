@@ -73,6 +73,21 @@ internal static partial class PdfTextReader
             return WithPage(index,page=>PdfTextReader.ReadPage(document,page));
         }
 
+        internal LayoutPage ReadStampPage(int index,Stream basePng)
+        {
+            return WithPage(index,page=>PdfTextReader.ReadStampPage(document,index,page,basePng));
+        }
+
+        internal bool HasStampAnnotation(int index)
+        {
+            return WithPage(index,page=>PdfTextReader.HasStampAnnotation(document,page));
+        }
+
+        internal bool IsScanImagePage(int index)
+        {
+            return WithPage(index,page=>PdfTextReader.IsScanImagePage(document,page));
+        }
+
         public void Dispose()
         {
             lock(LibraryLock)

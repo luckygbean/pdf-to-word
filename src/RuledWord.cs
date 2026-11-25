@@ -16,7 +16,7 @@ internal sealed partial class RuledWord : IDisposable
     private static readonly XNamespace R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     private static readonly XNamespace Rel = "http://schemas.openxmlformats.org/package/2006/relationships";
     private static readonly XNamespace Ct = "http://schemas.openxmlformats.org/package/2006/content-types";
-    private int runId, lineId;
+    private int runId, lineId, stampCount;
     private readonly int pageCount;
     private readonly bool backgroundForm;
     private readonly ZipArchive archive;
@@ -110,7 +110,8 @@ internal sealed partial class RuledWord : IDisposable
         int size=Math.Max(2,(int)Math.Round(2*line.FontSize));
         var style=new XElement(W+"rPr",
             new XElement(W+"rFonts",At("ascii",font),At("hAnsi",font),At("eastAsia",font),At("cs",font)),
-            line.Bold?Val("b",1):null, Val("sz",size),Val("szCs",size));
+            line.Bold?Val("b",1):null,line.InkGray.HasValue?Val("color",Gray(line.InkGray.Value)):null,
+            Val("sz",size),Val("szCs",size));
         // Match the PDF's advance width, including scaled labels and the white
         // space carried by full-width punctuation.
         if(!naturalWidth && line.Text.Trim().Length>=3 && line.Right>line.Left+1)
@@ -293,6 +294,21 @@ internal sealed partial class RuledWord : IDisposable
             new XAttribute("strokecolor","#"+Gray(rule.Gray)),new XAttribute("strokeweight",Pt(rule.Width)))));
     }
 
+    private XElement StampDrawing(LayoutStamp stamp)
+    {
+        int number=++stampCount;
+        string id="stamp"+number;
+        string target="media/"+id+".png";
+        using(var stream=archive.CreateEntry("word/"+target,CompressionLevel.NoCompression).Open())
+            stream.Write(stamp.Png,0,stamp.Png.Length);
+        relationships.Add(Relationship(id,"image",target));
+        const int emusPerPoint=12700;
+        return FixedPages.Drawing(pageCount+number,"印章 "+number,id,
+            (long)Math.Round(stamp.Left*emusPerPoint),(long)Math.Round(stamp.Top*emusPerPoint),
+            (long)Math.Round(stamp.Width*emusPerPoint),(long)Math.Round(stamp.Height*emusPerPoint),
+            false,number+1);
+    }
+
     private void Page(XElement body,LayoutPage page,bool last,XElement picture)
     {
         var remaining=new HashSet<LayoutLine>(page.Lines);
@@ -332,6 +348,7 @@ internal sealed partial class RuledWord : IDisposable
         var end=Spacer(.05);
         if(picture!=null) end.Add(picture);
         foreach(var rule in page.Rules) end.Add(LineShape(rule));
+        foreach(var stamp in page.Stamps) end.Add(StampDrawing(stamp));
         body.Add(end);
         var size=new XElement(W+"pgSz",At("w",Tw(page.Width)),At("h",Tw(page.Height)));
         if(page.Width>page.Height) size.SetAttributeValue(W+"orient","landscape");

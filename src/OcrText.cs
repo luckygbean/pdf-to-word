@@ -30,10 +30,7 @@ public static class OcrText
     // The caller owns the unique output path and discards the partial file on error.
     public static async Task<string> ConvertAsync(string input, string output, string password, Action<int, int> progress)
     {
-        OcrEngine engine = OcrEngine.TryCreateFromLanguage(new Language("zh-Hans"))
-            ?? OcrEngine.TryCreateFromUserProfileLanguages();
-        if (engine == null && OcrEngine.AvailableRecognizerLanguages.Count > 0)
-            engine = OcrEngine.TryCreateFromLanguage(OcrEngine.AvailableRecognizerLanguages[0]);
+        OcrEngine engine = CreateEngine();
         if (engine == null)
             throw new InvalidOperationException("Windows 缺少 OCR 识别语言。请在 Windows 设置的“语言和区域”中安装所需语言的“光学字符识别”组件。");
 
@@ -132,7 +129,15 @@ public static class OcrText
         }
     }
 
-    private static string CleanLine(string text)
+    internal static OcrEngine CreateEngine()
+    {
+        var engine=OcrEngine.TryCreateFromLanguage(new Language("zh-Hans")) ?? OcrEngine.TryCreateFromUserProfileLanguages();
+        if(engine==null && OcrEngine.AvailableRecognizerLanguages.Count>0)
+            engine=OcrEngine.TryCreateFromLanguage(OcrEngine.AvailableRecognizerLanguages[0]);
+        return engine;
+    }
+
+    internal static string CleanLine(string text)
     {
         var filtered = new StringBuilder(text.Length);
         for (int i = 0; i < text.Length; i++)

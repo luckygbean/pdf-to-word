@@ -32,20 +32,24 @@ internal static class FixedPages
 
     internal static XElement Drawing(int n, long cx, long cy, bool behind=false)
     {
-        var name = "PDF 第 " + n + " 页";
+        return Drawing(n,"PDF 第 "+n+" 页","page"+n,0,0,cx,cy,behind,0);
+    }
+
+    internal static XElement Drawing(int id,string name,string relationshipId,long x,long y,long cx,long cy,bool behind,int zIndex)
+    {
         var picture = new XElement(Pic+"pic",
-            new XElement(Pic+"nvPicPr", new XElement(Pic+"cNvPr", new XAttribute("id",n), new XAttribute("name",name)), new XElement(Pic+"cNvPicPr")),
-            new XElement(Pic+"blipFill", new XElement(A+"blip", new XAttribute(R+"embed","page"+n)), new XElement(A+"stretch",new XElement(A+"fillRect"))),
+            new XElement(Pic+"nvPicPr", new XElement(Pic+"cNvPr", new XAttribute("id",id), new XAttribute("name",name)), new XElement(Pic+"cNvPicPr")),
+            new XElement(Pic+"blipFill", new XElement(A+"blip", new XAttribute(R+"embed",relationshipId)), new XElement(A+"stretch",new XElement(A+"fillRect"))),
             new XElement(Pic+"spPr",
                 new XElement(A+"xfrm", new XElement(A+"off",new XAttribute("x",0),new XAttribute("y",0)),new XElement(A+"ext",new XAttribute("cx",cx),new XAttribute("cy",cy))),
                 new XElement(A+"prstGeom",new XAttribute("prst","rect"),new XElement(A+"avLst"))));
-        var anchor = new XElement(Wp+"anchor",new XAttribute("simplePos",0),new XAttribute("relativeHeight",0),new XAttribute("behindDoc",behind?1:0),
+        var anchor = new XElement(Wp+"anchor",new XAttribute("simplePos",0),new XAttribute("relativeHeight",zIndex),new XAttribute("behindDoc",behind?1:0),
             new XAttribute("locked",1),new XAttribute("layoutInCell",0),new XAttribute("allowOverlap",1),
             new XElement(Wp+"simplePos",new XAttribute("x",0),new XAttribute("y",0)),
-            new XElement(Wp+"positionH",new XAttribute("relativeFrom","page"),new XElement(Wp+"posOffset",0)),
-            new XElement(Wp+"positionV",new XAttribute("relativeFrom","page"),new XElement(Wp+"posOffset",0)),
+            new XElement(Wp+"positionH",new XAttribute("relativeFrom","page"),new XElement(Wp+"posOffset",x)),
+            new XElement(Wp+"positionV",new XAttribute("relativeFrom","page"),new XElement(Wp+"posOffset",y)),
             new XElement(Wp+"extent",new XAttribute("cx",cx),new XAttribute("cy",cy)),
-            new XElement(Wp+"wrapNone"),new XElement(Wp+"docPr",new XAttribute("id",n),new XAttribute("name",name)),
+            new XElement(Wp+"wrapNone"),new XElement(Wp+"docPr",new XAttribute("id",id),new XAttribute("name",name)),
             new XElement(Wp+"cNvGraphicFramePr",new XElement(A+"graphicFrameLocks",new XAttribute("noChangeAspect",1))),
             new XElement(A+"graphic", new XElement(A+"graphicData",new XAttribute("uri", Pic.NamespaceName),picture)));
         return new XElement(W+"r",new XElement(W+"drawing",anchor));
