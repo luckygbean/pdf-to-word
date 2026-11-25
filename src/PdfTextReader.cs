@@ -8,64 +8,155 @@ using System.Text;
 
 // Read the visible crop in PDF points. A null result asks the caller to use its
 // general-purpose converter instead of silently dropping unsupported artwork.
-internal static class PdfTextReader
+internal static partial class PdfTextReader
 {
     private static readonly object LibraryLock = new object();
+    private static int openSessions;
 
-    internal static List<LayoutPage> Read(string pdf)
+    internal static Session Open(string pdf)
     {
         lock (LibraryLock)
         {
             if (!NativePdfium.TryLoad()) return null;
-            Api.FPDF_InitLibrary();
-            try
-            {
-                using (var file = new FileStream(pdf, FileMode.Open, FileAccess.Read, FileShare.Read))
-                {
-                    if (file.Length == 0) return null;
-                    using (var mapping = MemoryMappedFile.CreateFromFile(file, null, 0, MemoryMappedFileAccess.Read,
-                                                                         HandleInheritability.None, true))
-                    using (var view = mapping.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read))
-                    {
-                        var doc = Api.FPDF_LoadMemDocument64(view.SafeMemoryMappedViewHandle.DangerousGetHandle(),
-                                                            (ulong)file.Length, IntPtr.Zero);
-                        if (doc == IntPtr.Zero) return null;
-                        try { return ReadPages(doc); }
-                        finally { Api.FPDF_CloseDocument(doc); }
-                    }
-                }
-            }
-            finally { Api.FPDF_DestroyLibrary(); }
+            if (openSessions==0) Api.FPDF_InitLibrary();
+            openSessions++;
+            var session = new Session();
+            try { if (session.Initialize(pdf)) return session; }
+            catch { session.Dispose(); throw; }
+            session.Dispose();
+            return null;
         }
     }
 
-    private static List<LayoutPage> ReadPages(IntPtr document)
+    internal sealed class Session : IDisposable
     {
-        int count = Api.FPDF_GetPageCount(document);
-        if (count <= 0 || Api.FPDF_GetFormType(document) != 0) return null;
-        var pages = new List<LayoutPage>();
-        for (int i = 0; i < count; ++i)
+        private MemoryMappedFile mapping;
+        private MemoryMappedViewAccessor view;
+        private IntPtr document;
+        private bool disposed;
+        internal int PageCount { get; private set; }
+
+        internal bool Initialize(string path)
         {
-            var page = Api.FPDF_LoadPage(document, i);
-            if (page == IntPtr.Zero) return null;
-            try
+            using(var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read))
             {
-                var layout = ReadPage(page);
-                if (layout == null) return null;
-                pages.Add(layout);
+                if (file.Length==0) return false;
+                mapping=MemoryMappedFile.CreateFromFile(file,null,0,MemoryMappedFileAccess.Read,
+                    HandleInheritability.None,true);
+                view=mapping.CreateViewAccessor(0,0,MemoryMappedFileAccess.Read);
+                document=Api.FPDF_LoadMemDocument64(view.SafeMemoryMappedViewHandle.DangerousGetHandle(),
+                    (ulong)file.Length,IntPtr.Zero);
             }
-            finally { Api.FPDF_ClosePage(page); }
+            if(document==IntPtr.Zero) return false;
+            PageCount=Api.FPDF_GetPageCount(document);
+            // AcroForm fields affect their individual widget pages. XFA can define
+            // a different document-wide appearance and needs the general importer.
+            int form=Api.FPDF_GetFormType(document);
+            return PageCount>0 && (form==0 || form==1);
         }
-        return pages;
+
+        internal T WithPage<T>(int index,Func<IntPtr,T> read)
+        {
+            lock(LibraryLock)
+            {
+                if(disposed) throw new ObjectDisposedException("PDF reader");
+                if(index<0 || index>=PageCount) throw new ArgumentOutOfRangeException("index");
+                var page=Api.FPDF_LoadPage(document,index);
+                if(page==IntPtr.Zero) throw new InvalidDataException("无法读取 PDF 第 "+(index+1)+" 页。");
+                try { return read(page); }
+                finally { Api.FPDF_ClosePage(page); }
+            }
+        }
+
+        internal LayoutPage ReadPage(int index)
+        {
+            return WithPage(index,page=>PdfTextReader.ReadPage(document,page));
+        }
+
+        public void Dispose()
+        {
+            lock(LibraryLock)
+            {
+                if(disposed) return;
+                disposed=true;
+                if(document!=IntPtr.Zero) Api.FPDF_CloseDocument(document);
+                if(view!=null) view.Dispose();
+                if(mapping!=null) mapping.Dispose();
+                if(--openSessions==0) Api.FPDF_DestroyLibrary();
+            }
+        }
     }
 
-    private static LayoutPage ReadPage(IntPtr page)
+    private sealed class PageLink
+    {
+        internal Rect Bounds;
+        internal int Target;
+    }
+
+    // PDFium does not expose a /BS dictionary's stroke width through GetBorder.
+    // Check the rendered appearance before replacing link rectangles with native links.
+    private static bool SameWithLinks(IntPtr page,Rect box)
+    {
+        // ReadPage limits the visible crop to Word's 22-inch page size before
+        // reaching this allocation. Annotation coordinates never set its size.
+        int w=Math.Max(1,(int)Math.Ceiling(box.Right-box.Left));
+        int h=Math.Max(1,(int)Math.Ceiling(box.Top-box.Bottom));
+        var pixels=new byte[checked(w*h*4)];
+        var pinned=GCHandle.Alloc(pixels,GCHandleType.Pinned);
+        try
+        {
+            var bitmap=Paint.FPDFBitmap_CreateEx(w,h,3,pinned.AddrOfPinnedObject(),w*4);
+            if(bitmap==IntPtr.Zero) return false;
+            try
+            {
+                if(Paint.FPDFBitmap_FillRect(bitmap,0,0,w,h,0xffffffff)==0) return false;
+                Paint.FPDF_RenderPageBitmap(bitmap,page,0,0,w,h,0,0);
+                var plain=(byte[])pixels.Clone();
+                if(Paint.FPDFBitmap_FillRect(bitmap,0,0,w,h,0xffffffff)==0) return false;
+                Paint.FPDF_RenderPageBitmap(bitmap,page,0,0,w,h,0,1);
+                return plain.SequenceEqual(pixels);
+            }
+            finally { Paint.FPDFBitmap_Destroy(bitmap); }
+        }
+        finally { pinned.Free(); }
+    }
+
+    private static List<PageLink> InternalLinks(IntPtr document,IntPtr page,Rect box)
+    {
+        var links=new List<PageLink>();
+        int count=Api.FPDFPage_GetAnnotCount(page);
+        if(count<0) return null;
+        for(int i=0;i<count;i++)
+        {
+            var annot=Paint.FPDFPage_GetAnnot(page,i);
+            if(annot==IntPtr.Zero) return null;
+            try
+            {
+                Rect rect;
+                if(Paint.FPDFAnnot_GetSubtype(annot)!=2 || Api.FPDFAnnot_HasKey(annot,"AP")!=0 ||
+                    Api.FPDFAnnot_GetRect(annot,out rect)==0 || !Finite(rect.Left) || !Finite(rect.Right) ||
+                    !Finite(rect.Top) || !Finite(rect.Bottom) || rect.Right<=rect.Left || rect.Top<=rect.Bottom) return null;
+                var link=Api.FPDFAnnot_GetLink(annot);
+                if(link==IntPtr.Zero || Api.FPDFLink_GetAction(link)!=IntPtr.Zero) return null;
+                var dest=Api.FPDFLink_GetDest(document,link);
+                int index=dest==IntPtr.Zero ? -1 : Api.FPDFDest_GetDestPageIndex(document,dest);
+                if(index<0 || index>=Api.FPDF_GetPageCount(document)) return null;
+                links.Add(new PageLink{Bounds=rect,Target=index+1});
+            }
+            finally { Paint.FPDFPage_CloseAnnot(annot); }
+        }
+        if(links.Count>0 && !SameWithLinks(page,box)) return null;
+        return links;
+    }
+
+    private static LayoutPage ReadPage(IntPtr document,IntPtr page)
     {
         Rect box;
-        if (Api.FPDF_GetPageBoundingBox(page, out box) == 0 || Api.FPDFPage_GetRotation(page) != 0 ||
-            Api.FPDFPage_GetAnnotCount(page) != 0) return null;
+        if (Api.FPDF_GetPageBoundingBox(page, out box) == 0 || Api.FPDFPage_GetRotation(page) != 0) return null;
         var result = new LayoutPage { Width = box.Right-box.Left, Height = box.Top-box.Bottom };
         if (!(result.Width > 0 && result.Width <= 1584 && result.Height > 0 && result.Height <= 1584)) return null;
+        var links=InternalLinks(document,page,box);
+        if(links==null) return null;
         int objects = Api.FPDFPage_CountObjects(page);
         bool painted = false;
         var textObjects = new HashSet<IntPtr>();
@@ -96,8 +187,22 @@ internal static class PdfTextReader
         }
         var text = Api.FPDFText_LoadPage(page);
         if (text == IntPtr.Zero) return null;
-        try { return ReadCharacters(text, box, result, textObjects) ? result : null; }
+        try { if(!ReadCharacters(text,box,result,textObjects,false,document,page)) return null; }
         finally { Api.FPDFText_ClosePage(text); }
+        foreach(var link in links)
+        {
+            bool matched=false;
+            foreach(var line in result.Lines)
+            {
+                double x=box.Left+(line.Left+line.Right)/2, y=box.Top-(line.Top+line.Bottom)/2;
+                if(x<link.Bounds.Left || x>link.Bounds.Right || y<link.Bounds.Bottom || y>link.Bounds.Top) continue;
+                if(line.LinkPage!=0 && line.LinkPage!=link.Target) return null;
+                line.LinkPage=link.Target;
+                matched=true;
+            }
+            if(!matched) return null;
+        }
+        return result;
     }
 
     private struct Point
@@ -212,7 +317,9 @@ internal static class PdfTextReader
                 double bottom=points.Min(p=>p.Y), top=points.Max(p=>p.Y);
                 double width=right-left, height=top-bottom;
                 if (fillGray==255 && !painted && stroke==0) continue;
-                bool junction = Math.Max(width,height)<=1.5;
+                // Office also emits separate, nearly square corner pieces for
+                // double rules (up to roughly 2.3 pt in its standard forms).
+                bool junction = Math.Max(width,height)<=2.5;
                 if (Math.Min(width,height)>4 || (!junction && Math.Max(width,height)<4*Math.Min(width,height)) || stroke!=0) return false;
                 Point a,b;
                 if (width>=height) { a=new Point(left,(top+bottom)/2); b=new Point(right,a.Y); }
@@ -230,23 +337,52 @@ internal static class PdfTextReader
         return true;
     }
 
-    private static bool ReadCharacters(IntPtr text, Rect box, LayoutPage result, HashSet<IntPtr> objects)
+    // Some Office exports contain stroked sequences of spaces. Their PDFium
+    // bounds include the line width even though they paint no glyph and the
+    // text page yields no characters. Retain every uncertain object.
+    private static bool EmptyUnpaintedText(IntPtr document,IntPtr page,IntPtr text,IntPtr obj)
+    {
+        float left,bottom,right,top;
+        if(document==IntPtr.Zero || page==IntPtr.Zero || Api.FPDFTextObj_GetText(obj,text,IntPtr.Zero,0)!=2 ||
+           Api.FPDFPageObj_GetBounds(obj,out left,out bottom,out right,out top)==0 ||
+           !(right-left>0 && right-left<=1584 && top-bottom>0 && top-bottom<=1)) return false;
+        var bitmap=Api.FPDFTextObj_GetRenderedBitmap(document,page,obj,6);
+        if(bitmap==IntPtr.Zero) return false;
+        try
+        {
+            int width=Api.FPDFBitmap_GetWidth(bitmap), height=Api.FPDFBitmap_GetHeight(bitmap);
+            int stride=Api.FPDFBitmap_GetStride(bitmap);
+            var pixels=Api.FPDFBitmap_GetBuffer(bitmap);
+            if(Api.FPDFBitmap_GetFormat(bitmap)!=4 || width<1 || width>9510 || height<1 || height>8 ||
+               stride<width*4 || stride>width*4+64 || pixels==IntPtr.Zero) return false;
+            for(int y=0;y<height;y++) for(int x=0;x<width;x++)
+                if(Marshal.ReadByte(pixels,y*stride+x*4+3)!=0) return false;
+            return true;
+        }
+        finally { Paint.FPDFBitmap_Destroy(bitmap); }
+    }
+
+    private static bool ReadCharacters(IntPtr text, Rect box, LayoutPage result, HashSet<IntPtr> objects,
+        bool ignoreOtherObjects=false,IntPtr document=default(IntPtr),IntPtr page=default(IntPtr))
     {
         LayoutLine run = null;
         var buffer = new StringBuilder();
         var fontNames = new Dictionary<IntPtr,string>();
         var seen = new HashSet<IntPtr>();
         IntPtr current = IntPtr.Zero;
+        uint previousCode=0;
+        double previousOrigin=0;
         int count = Api.FPDFText_CountChars(text);
         if (count < 0) return false;
         for (int i=0; i<count; ++i)
         {
             if (Api.FPDFText_IsGenerated(text,i)==1) continue;
+            var obj=Api.FPDFText_GetTextObject(text,i);
+            if(ignoreOtherObjects && !objects.Contains(obj)) continue;
             uint code=Api.FPDFText_GetUnicode(text,i);
             if (code==0 || code>0x10ffff || code==0xfffd || code==0xfffe || code==0xffff ||
                 (code>=0xd800 && code<=0xdfff) || code<32 ||
                 Api.FPDFText_HasUnicodeMapError(text,i)!=0) return false;
-            var obj=Api.FPDFText_GetTextObject(text,i);
             if (obj==IntPtr.Zero || !objects.Contains(obj))
             {
                 if (char.IsWhiteSpace(char.ConvertFromUtf32((int)code),0)) continue;
@@ -261,6 +397,7 @@ internal static class PdfTextReader
             if (!(size>=1 && size<=300) || Api.FPDFText_GetCharOrigin(text,i,out ox,out oy)==0 ||
                 Api.FPDFText_GetCharBox(text,i,out left,out right,out bot,out top)==0) return false;
             if (!Inside(new Point(left,bot),box) || !Inside(new Point(right,top),box)) return false;
+            double inkLeft=left-box.Left, inkRight=right-box.Left;
             // Word lays out glyphs by advances. Ink bounds would compress
             // leading/trailing full-width punctuation and offset centered labels.
             Rect loose;
@@ -269,9 +406,15 @@ internal static class PdfTextReader
             left=loose.Left;
             right=loose.Right;
             double baseline=box.Top-oy;
+            // Word compresses adjacent title brackets and enumeration commas.
+            // Keep each measured position when the PDF used full em advances.
+            bool titlePair=(previousCode=='》' && (code=='《' || code=='、')) ||
+                           (previousCode=='、' && code=='《');
+            double advance=ox-previousOrigin;
             // Distinct PDF text objects frequently live in adjacent cells. Keeping
             // them independent lets table reconstruction use the actual geometry.
             if (run==null || current!=obj || Math.Abs(run.Baseline-baseline)>.35 ||
+                (titlePair && advance>=size*.9 && advance<=size*1.1) ||
                 left-box.Left > run.Right+size*1.25 || right-box.Left < run.Left-.5)
             {
                 FinishRun(run,buffer,result);
@@ -286,16 +429,27 @@ internal static class PdfTextReader
                     fontNames.Add(font,family);
                 }
                 run=new LayoutLine { Left=left-box.Left, Top=box.Top-top, Right=right-box.Left, Bottom=box.Top-bot,
+                    InkLeft=inkLeft, InkRight=inkRight,
                     FontSize=size, FontName=family, Bold=Api.FPDFText_GetFontWeight(text,i)>=600 ||
                     Api.FPDFTextObj_GetTextRenderMode(obj)==2, Baseline=baseline };
                 current=obj;
             }
             run.Left=Math.Min(run.Left,left-box.Left); run.Right=Math.Max(run.Right,right-box.Left);
+            run.InkLeft=Math.Min(run.InkLeft,inkLeft); run.InkRight=Math.Max(run.InkRight,inkRight);
             run.Top=Math.Min(run.Top,box.Top-top); run.Bottom=Math.Max(run.Bottom,box.Top-bot);
             buffer.Append(char.ConvertFromUtf32((int)code));
+            previousCode=code;
+            previousOrigin=ox;
         }
         FinishRun(run,buffer,result);
-        return seen.SetEquals(objects);
+        if(ignoreOtherObjects)
+        {
+            // Rasterize any object for which PDFium produced no characters.
+            // The caller deactivates only the survivors when painting the background.
+            objects.IntersectWith(seen);
+            return true;
+        }
+        return objects.All(obj=>seen.Contains(obj) || EmptyUnpaintedText(document,page,text,obj));
     }
 
     private static void FinishRun(LayoutLine run, StringBuilder buffer, LayoutPage page)
@@ -325,6 +479,12 @@ internal static class PdfTextReader
         [DllImport(Dll)] internal static extern int FPDF_GetPageBoundingBox(IntPtr page,out Rect rect);
         [DllImport(Dll)] internal static extern int FPDFPage_GetRotation(IntPtr page);
         [DllImport(Dll)] internal static extern int FPDFPage_GetAnnotCount(IntPtr page);
+        [DllImport(Dll)] internal static extern int FPDFAnnot_GetRect(IntPtr annot,out Rect box);
+        [DllImport(Dll,CharSet=CharSet.Ansi,ExactSpelling=true)] internal static extern int FPDFAnnot_HasKey(IntPtr annot,string name);
+        [DllImport(Dll)] internal static extern IntPtr FPDFAnnot_GetLink(IntPtr annot);
+        [DllImport(Dll)] internal static extern IntPtr FPDFLink_GetDest(IntPtr document,IntPtr link);
+        [DllImport(Dll)] internal static extern IntPtr FPDFLink_GetAction(IntPtr link);
+        [DllImport(Dll)] internal static extern int FPDFDest_GetDestPageIndex(IntPtr document,IntPtr dest);
         [DllImport(Dll)] internal static extern int FPDFPage_CountObjects(IntPtr page);
         [DllImport(Dll)] internal static extern IntPtr FPDFPage_GetObject(IntPtr page,int i);
         [DllImport(Dll)] internal static extern int FPDFPageObj_GetType(IntPtr obj);
@@ -360,6 +520,13 @@ internal static class PdfTextReader
         [DllImport(Dll)] internal static extern double FPDFText_GetFontSize(IntPtr page,int i);
         [DllImport(Dll)] internal static extern int FPDFText_GetFontWeight(IntPtr page,int i);
         [DllImport(Dll)] internal static extern int FPDFTextObj_GetTextRenderMode(IntPtr obj);
+        [DllImport(Dll)] internal static extern uint FPDFTextObj_GetText(IntPtr obj,IntPtr text,IntPtr buffer,uint length);
+        [DllImport(Dll)] internal static extern IntPtr FPDFTextObj_GetRenderedBitmap(IntPtr document,IntPtr page,IntPtr obj,float scale);
+        [DllImport(Dll)] internal static extern int FPDFBitmap_GetWidth(IntPtr image);
+        [DllImport(Dll)] internal static extern int FPDFBitmap_GetHeight(IntPtr image);
+        [DllImport(Dll)] internal static extern int FPDFBitmap_GetStride(IntPtr image);
+        [DllImport(Dll)] internal static extern int FPDFBitmap_GetFormat(IntPtr image);
+        [DllImport(Dll)] internal static extern IntPtr FPDFBitmap_GetBuffer(IntPtr image);
         [DllImport(Dll)] internal static extern IntPtr FPDFTextObj_GetFont(IntPtr obj);
         [DllImport(Dll)] internal static extern UIntPtr FPDFFont_GetFamilyName(IntPtr font,[Out] byte[] buffer,UIntPtr size);
     }

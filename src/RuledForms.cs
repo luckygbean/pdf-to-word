@@ -6,17 +6,24 @@ internal static class RuledForms
 {
     // A PDF text object can span columns even when individual glyphs are drawn
     // in different cells. Do not assign such an entire object to a single cell.
-    private static bool LabelsFit(LayoutPage page, RuledTable table)
+    private static bool LabelsFit(LayoutPage page, RuledTable table,bool nested)
     {
         foreach(var line in page.Lines)
         {
             double y=(line.Top+line.Bottom)/2, x=(line.Left+line.Right)/2;
             if(y<=table.Y[0] || y>=table.Y.Last()) continue;
-            if(x<table.X[0] || x>=table.X.Last()) return false;
+            if(x<table.X[0] || x>=table.X.Last())
+            {
+                if(nested && (line.Right<=table.X[0]+.75 || line.Left>=table.X.Last()-.75)) continue;
+                return false;
+            }
             var cell=table.Cells.FirstOrDefault(c=>x>=table.X[c.Col] && x<table.X[c.Col+c.ColSpan] &&
                 y>=table.Y[c.Row] && y<table.Y[c.Row+c.RowSpan]);
-            if(cell==null || line.Left<table.X[cell.Col]-.75 ||
-               line.Right>table.X[cell.Col+cell.ColSpan]+.75) return false;
+            // Full-width punctuation can have an advance past the edge even
+            // though all of its ink fits the source cell.
+            bool ink=line.InkRight>line.InkLeft;
+            if(cell==null || (ink?line.InkLeft:line.Left)<table.X[cell.Col]-.75 ||
+               (ink?line.InkRight:line.Right)>table.X[cell.Col+cell.ColSpan]+.75) return false;
         }
         return true;
     }
@@ -52,39 +59,70 @@ internal static class RuledForms
         return false;
     }
 
-    internal static string TryConvert(string input,string output,Action<int,int> progress)
+    private static RuledCell EnclosingCell(RuledTable outer,RuledTable inner)
     {
-        var pages=PdfTextReader.Read(input);
-        if(pages==null || pages.Count==0) return null;
-        int processed=0;
-        foreach(var page in pages)
+        const double tolerance=.45;
+        return outer.Cells.FirstOrDefault(cell=>inner.X[0]>=outer.X[cell.Col]-tolerance &&
+            inner.X.Last()<=outer.X[cell.Col+cell.ColSpan]+tolerance &&
+            inner.Y[0]>=outer.Y[cell.Row]-tolerance && inner.Y.Last()<=outer.Y[cell.Row+cell.RowSpan]+tolerance &&
+            cell.NestedTables.All(sibling=>sibling.Y.Last()<=inner.Y[0]+tolerance));
+    }
+
+    private static LayoutRule DominantRule(IEnumerable<LayoutRule> rules)
+    {
+        return rules.GroupBy(r=>new { Width=Math.Round(r.Width,2), r.Gray })
+            .OrderByDescending(g=>g.Sum(r=>r.Right-r.Left+r.Bottom-r.Top))
+            .Select(g=>g.First()).FirstOrDefault();
+    }
+
+    private static void SetBorderStyles(RuledTable table,List<LayoutRule> borders)
+    {
+        var usual=DominantRule(borders);
+        table.BorderWidth=usual.Width;
+        table.BorderGray=usual.Gray;
+        foreach(string side in new[]{"top","bottom","left","right"})
         {
-            // Whole-document fallback avoids dropping unsupported pages in mixed PDFs.
-            if(page.Width<=0 || page.Height<=0 || Math.Max(page.Width,page.Height)>1584 ||
-                page.Lines.Count==0 || page.Rules.Count==0) return null;
-            page.Tables=GridDetection.Find(page.Rules);
-            if(page.Tables.Count==0) return null;
-            var remaining=new List<LayoutRule>(page.Rules);
-            double previousTableBottom=-1;
-            foreach(var table in page.Tables)
-            {
-                if(table.Y[0]<previousTableBottom || !LabelsFit(page,table)) return null;
-                previousTableBottom=table.Y.Last();
-                var parsed=remaining.Where(r=>IsBorder(r,table)).ToList();
-                if(parsed.Count==0) return null;
-                var style=parsed.GroupBy(r=>new {Width=Math.Round(r.Width,2), r.Gray})
-                    .OrderByDescending(group=>group.Sum(r=>r.Right-r.Left+r.Bottom-r.Top)).First().Key;
-                table.BorderWidth=style.Width;
-                table.BorderGray=style.Gray;
-                var borders=new HashSet<LayoutRule>(parsed);
-                remaining.RemoveAll(borders.Contains);
-            }
-            if(remaining.Any(r=>!r.IsHorizontal)) return null;
-            page.Rules=remaining;
-            progress(++processed,pages.Count);
+            bool horizontal=side=="top" || side=="bottom";
+            var axis=horizontal?table.Y:table.X;
+            double edge=(side=="top" || side=="left")?axis[0]:axis.Last();
+            var style=DominantRule(borders.Where(r=>r.IsHorizontal==horizontal &&
+                Math.Abs((horizontal?r.Top:r.Left)-edge)<=.65));
+            if(style!=null) table.OuterBorders.Add(side,style);
         }
-        RuledWord.Write(output,pages);
-        return String.Format("已按 PDF 的表格线和文字位置重建 {0} 页、{1} 张可编辑表格、{2} 个独立单元格。",
-            pages.Count,pages.Sum(p=>p.Tables.Count),pages.Sum(p=>p.Tables.Sum(t=>t.Cells.Count)));
+    }
+
+    internal static bool PreparePage(LayoutPage page)
+    {
+        if(page==null || page.Width<=0 || page.Height<=0 || Math.Max(page.Width,page.Height)>1584)
+            return false;
+        var tables=GridDetection.Find(page.Rules);
+        var remaining=new List<LayoutRule>(page.Rules);
+        RuledTable previous=null;
+        foreach(var table in tables)
+        {
+            RuledCell owner=null;
+            if(previous!=null && table.Y[0]<previous.Y.Last())
+            {
+                owner=EnclosingCell(previous,table);
+                if(owner==null) continue;
+            }
+            if(!LabelsFit(page,table,owner!=null)) continue;
+            var parsed=remaining.Where(r=>IsBorder(r,table)).ToList();
+            if(parsed.Count==0) continue;
+            SetBorderStyles(table,parsed);
+            var borders=new HashSet<LayoutRule>(parsed);
+            remaining.RemoveAll(borders.Contains);
+            if(owner==null)
+            {
+                page.Tables.Add(table);
+                previous=table;
+            }
+            else owner.NestedTables.Add(table);
+            page.TableCount++;
+            page.CellCount+=table.Cells.Count;
+        }
+        // Rules outside recognized cells, including incomplete table edges, stay visible.
+        page.Rules=remaining;
+        return true;
     }
 }

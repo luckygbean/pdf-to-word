@@ -30,7 +30,7 @@ internal static class FixedPages
         return new XElement(W+"sectPr", new XElement(W+"type", new XAttribute(W+"val","nextPage")), size, margins);
     }
 
-    private static XElement Drawing(int n, long cx, long cy)
+    internal static XElement Drawing(int n, long cx, long cy, bool behind=false)
     {
         var name = "PDF 第 " + n + " 页";
         var picture = new XElement(Pic+"pic",
@@ -39,7 +39,7 @@ internal static class FixedPages
             new XElement(Pic+"spPr",
                 new XElement(A+"xfrm", new XElement(A+"off",new XAttribute("x",0),new XAttribute("y",0)),new XElement(A+"ext",new XAttribute("cx",cx),new XAttribute("cy",cy))),
                 new XElement(A+"prstGeom",new XAttribute("prst","rect"),new XElement(A+"avLst"))));
-        var anchor = new XElement(Wp+"anchor",new XAttribute("simplePos",0),new XAttribute("relativeHeight",0),new XAttribute("behindDoc",0),
+        var anchor = new XElement(Wp+"anchor",new XAttribute("simplePos",0),new XAttribute("relativeHeight",0),new XAttribute("behindDoc",behind?1:0),
             new XAttribute("locked",1),new XAttribute("layoutInCell",0),new XAttribute("allowOverlap",1),
             new XElement(Wp+"simplePos",new XAttribute("x",0),new XAttribute("y",0)),
             new XElement(Wp+"positionH",new XAttribute("relativeFrom","page"),new XElement(Wp+"posOffset",0)),
@@ -71,6 +71,19 @@ internal static class FixedPages
         }
     }
 
+    internal static async Task<bool> RenderAsync(PdfPage page,InMemoryRandomAccessStream pixels,int dpi)
+    {
+        var size=page.Size;
+        double scale = Math.Min(dpi/96.0, Math.Sqrt(30000000.0/(size.Width*size.Height)));
+
+        var options = new PdfPageRenderOptions { DestinationWidth = (uint)Math.Max(1,Math.Round(size.Width*scale)),
+            DestinationHeight = (uint)Math.Max(1,Math.Round(size.Height*scale)), BitmapEncoderId = BitmapEncoder.PngEncoderId,
+            IsIgnoringHighContrast = true, BackgroundColor = Windows.UI.Colors.White };
+        await page.RenderToStreamAsync(pixels,options);
+        pixels.Seek(0);
+        return scale+0.001 < dpi/96.0;
+    }
+
     private static async Task<string> WritePagesAsync(PdfDocument pdf, string output, int dpi, Action<int,int> progress)
     {
         int count = checked((int)pdf.PageCount);
@@ -88,13 +101,7 @@ internal static class FixedPages
                 int width = (int)Math.Round(size.Width*15), height = (int)Math.Round(size.Height*15);
                 if (Math.Min(width,height)<1 || Math.Max(width,height)>31680)
                     throw new InvalidDataException("第 "+(i+1)+" 页尺寸超出 Word 支持范围（最长边 55.88 厘米）。请先裁切或缩小该页。");
-                double scale = Math.Min(dpi/96.0, Math.Sqrt(30000000.0/(size.Width*size.Height)));
-                if (scale+0.001 < dpi/96.0) reduced.Add(i+1);
-                var options = new PdfPageRenderOptions { DestinationWidth = (uint)Math.Max(1,Math.Round(size.Width*scale)),
-                    DestinationHeight = (uint)Math.Max(1,Math.Round(size.Height*scale)), BitmapEncoderId = BitmapEncoder.PngEncoderId,
-                    IsIgnoringHighContrast = true, BackgroundColor = Windows.UI.Colors.White };
-                await page.RenderToStreamAsync(pixels,options);
-                pixels.Seek(0);
+                if(await RenderAsync(page,pixels,dpi)) reduced.Add(i+1);
                 string media = "media/page"+(i+1)+".png";
                 using (var dest = zip.CreateEntry("word/"+media, CompressionLevel.NoCompression).Open())
                 using (var source = pixels.AsStreamForRead()) await source.CopyToAsync(dest);

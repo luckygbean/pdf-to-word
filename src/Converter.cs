@@ -30,7 +30,7 @@ internal static class Converter
                 case "fixed": report = await FixedPages.ConvertAsync(input,temp,password,dpi,progress); break;
                 case "ocr": report = await OcrText.ConvertAsync(input,temp,password,progress); break;
                 case "edit":
-                    report = RuledForms.TryConvert(input,temp,progress);
+                    report = await MixedDocument.TryConvertAsync(input,temp,progress);
                     if (report==null) report = await WordAsync(input,temp);
                     break;
                 default: throw new ArgumentException("模式须为 fixed、edit 或 ocr。");
