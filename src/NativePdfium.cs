@@ -9,6 +9,9 @@ using System.Threading;
 internal static class NativePdfium
 {
     private const string Hash = "42D87F68957D745CE9377DFB1D8D63691E19082A7EC29FF421D22779D3142B29";
+    // Python hosts may be using their own pdfium.dll with independent handles
+    // and library lifetime. Bind this project's P/Invokes to its private module.
+    internal const string LibraryName = "PDFtoWord.Pdfium." + Hash + ".dll";
     private static readonly object Gate = new object();
     private static IntPtr module;
 
@@ -40,7 +43,7 @@ internal static class NativePdfium
             var directory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "PDFtoWord","runtime",Hash);
             Directory.CreateDirectory(directory);
-            string dll=Path.Combine(directory,"pdfium.dll");
+            string dll=Path.Combine(directory,LibraryName);
             using (var mutex=new Mutex(false,@"Local\PDFtoWord-pdfium-"+Hash))
             {
                 try { mutex.WaitOne(); } catch(AbandonedMutexException) { }

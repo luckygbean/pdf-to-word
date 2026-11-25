@@ -10,9 +10,13 @@ import unicodedata
 
 import pdfplumber
 from docx import Document
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 
 
 ROOT = Path(__file__).resolve().parents[1]
+QUALIFICATION = ROOT / "samples/qualification.pdf"
 
 
 def text_key(value):
@@ -50,6 +54,27 @@ def word_cells(table):
     return cells
 
 
+def check_qualification_alignment(table):
+    # These cells expose the inherited two-character indent in narrow columns,
+    # a vertical merge and a long single-line label near the cell edges.
+    labels = {"邮编", "注册地址", "其中", "基本账户银行账号"}
+    found = set()
+    for cell in word_cells(table).values():
+        label = text_key(cell.text)
+        if label not in labels:
+            continue
+        found.add(label)
+        assert len(cell.paragraphs) == 1, (label, "extra positioning paragraph")
+        paragraph = cell.paragraphs[0]
+        assert paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER, (label, "horizontal centering")
+        assert cell.vertical_alignment == WD_CELL_VERTICAL_ALIGNMENT.CENTER, (label, "vertical centering")
+        indent = paragraph._p.pPr.ind
+        for attr in ("left", "right", "firstLine", "firstLineChars"):
+            assert indent is not None and indent.get(qn("w:" + attr)) == "0", (label, attr)
+        assert not paragraph._p.xpath(".//w:fitText"), (label, "unexpected glyph width override")
+    assert found == labels, ("missing qualification labels", labels - found)
+
+
 def check_docx(source, docx):
     with pdfplumber.open(source) as pdf:
         settings = dict(snap_tolerance=0.45, join_tolerance=0.65, intersection_tolerance=0.65)
@@ -57,6 +82,8 @@ def check_docx(source, docx):
     document = Document(docx)
     if not expected or len(document.tables) != len(expected):
         raise AssertionError(f"Expected {len(expected)} tables, found {len(document.tables)}")
+    if source.resolve() == QUALIFICATION:
+        check_qualification_alignment(document.tables[0])
 
     filled = []
     for number, (reference, table) in enumerate(zip(expected, document.tables), 1):
@@ -86,7 +113,7 @@ def check_docx(source, docx):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", type=Path, nargs="?", default=ROOT / "samples/qualification.pdf")
+    parser.add_argument("source", type=Path, nargs="?", default=QUALIFICATION)
     parser.add_argument("--exe", type=Path, default=ROOT / "bin/PDFtoWord.exe")
     args = parser.parse_args()
     with TemporaryDirectory() as directory:

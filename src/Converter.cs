@@ -29,11 +29,15 @@ internal static class Converter
             {
                 case "fixed": report = await FixedPages.ConvertAsync(input,temp,password,dpi,progress); break;
                 case "ocr": report = await OcrText.ConvertAsync(input,temp,password,progress); break;
+                case "form":
+                    report=await MixedDocument.TryConvertAsync(input,temp,progress,true,dpi);
+                    if(report==null) throw new InvalidDataException("填写版需要无需打开密码且含可识别线框表格的 PDF。");
+                    break;
                 case "edit":
                     report = await MixedDocument.TryConvertAsync(input,temp,progress);
                     if (report==null) report = await WordAsync(input,temp);
                     break;
-                default: throw new ArgumentException("模式须为 fixed、edit 或 ocr。");
+                default: throw new ArgumentException("模式须为 fixed、edit、form 或 ocr。");
             }
             using (var zip = ZipFile.OpenRead(temp))
             {

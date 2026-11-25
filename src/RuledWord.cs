@@ -18,6 +18,7 @@ internal sealed partial class RuledWord : IDisposable
     private static readonly XNamespace Ct = "http://schemas.openxmlformats.org/package/2006/content-types";
     private int runId, lineId;
     private readonly int pageCount;
+    private readonly bool backgroundForm;
     private readonly ZipArchive archive;
     private readonly FileStream documentPart;
     private readonly XmlWriter xml;
@@ -27,10 +28,11 @@ internal sealed partial class RuledWord : IDisposable
 
     // The XML is streamed a page at a time. ZipArchive can have only one entry
     // open for writing; a temporary file allows image parts to stream directly.
-    internal RuledWord(string output,int totalPages)
+    internal RuledWord(string output,int totalPages,bool backgroundForm=false)
     {
         if(totalPages<1) throw new ArgumentOutOfRangeException("totalPages");
         pageCount=totalPages;
+        this.backgroundForm=backgroundForm;
         string spool=Path.Combine(Path.GetDirectoryName(Path.GetFullPath(output)),Path.GetRandomFileName());
         documentPart=new FileStream(spool,FileMode.CreateNew,FileAccess.ReadWrite,FileShare.None,
             65536,FileOptions.SequentialScan|FileOptions.DeleteOnClose);
@@ -101,7 +103,7 @@ internal sealed partial class RuledWord : IDisposable
         return new XElement(W+"p",new XElement(W+"pPr",Spacing(height),new XElement(W+"rPr",Val("sz",2))));
     }
 
-    private XElement Run(LayoutLine line)
+    private XElement Run(LayoutLine line,bool naturalWidth)
     {
         string font=String.IsNullOrWhiteSpace(line.FontName)?"SimSun":line.FontName;
         RememberFont(font,line.Text,line.Bold);
@@ -111,7 +113,7 @@ internal sealed partial class RuledWord : IDisposable
             line.Bold?Val("b",1):null, Val("sz",size),Val("szCs",size));
         // Match the PDF's advance width, including scaled labels and the white
         // space carried by full-width punctuation.
-        if(line.Text.Trim().Length>=3 && line.Right>line.Left+1)
+        if(!naturalWidth && line.Text.Trim().Length>=3 && line.Right>line.Left+1)
             style.Add(new XElement(W+"fitText",At("val",Math.Max(1,Tw(line.Right-line.Left))),At("id",++runId)));
         var run=new XElement(W+"r",style,new XElement(W+"t",new XAttribute(XNamespace.Xml+"space","preserve"),line.Text));
         return line.LinkPage>0 && line.LinkPage<=pageCount
@@ -119,25 +121,51 @@ internal sealed partial class RuledWord : IDisposable
             : run;
     }
 
-    private XElement Paragraph(TextRow row,double left,double height)
+    private static bool HasPositioningTab(LayoutLine previous,LayoutLine next)
+    {
+        return next.Left-previous.Right>Math.Max(1.4,next.FontSize*.2);
+    }
+
+    private XElement Paragraph(TextRow row,double left,double height,double? cellRight=null)
     {
         var first=row.Runs[0];
+        var last=row.Runs.Last();
+        double leftGap=first.Left-left;
+        double rightGap=cellRight.GetValueOrDefault()-last.Right;
+        bool absoluteTabs=row.Runs.Zip(row.Runs.Skip(1),HasPositioningTab).Any(gap=>gap);
+        // Express actual cell centering as centering. A fixed left indent only
+        // approximates it and competes with a reader's default first-line indent.
+        bool centered=cellRight.HasValue && !absoluteTabs && Math.Abs(leftGap-rightGap)<=1.25;
+        bool flushRight=cellRight.HasValue && row.Runs.Count==1 && first.Text.Length<=16 &&
+            rightGap>=0 && rightGap<=5 && leftGap>rightGap+row.FontSize;
+        var indent=new XElement(W+"ind",At("left",centered || flushRight?0:Math.Max(0,Tw(leftGap))),
+            At("firstLine",0),At("firstLineChars",0));
+        if(cellRight.HasValue)
+        {
+            indent.Add(At("right",flushRight?Tw(rightGap):0));
+            if(centered) indent.Add(At("leftChars",0),At("rightChars",0));
+        }
         var tabs=new XElement(W+"tabs");
         var pr=new XElement(W+"pPr", Val("widowControl",0),Val("autoSpaceDE",0),Val("autoSpaceDN",0),
             Val("snapToGrid",0), Spacing(height),
-            new XElement(W+"ind",At("left",Math.Max(0,Tw(first.Left-left)))),
+            indent,cellRight.HasValue?Val("jc",centered?"center":flushRight?"right":"left"):null,
             new XElement(W+"rPr",Val("sz",Math.Max(2,(int)Math.Round(2*row.FontSize)))));
         var p=new XElement(W+"p",pr);
-        double prevRight=first.Left;
+        LayoutLine previous=null;
         foreach (var run in row.Runs)
         {
-            if(run!=first && run.Left-prevRight>Math.Max(1.4,run.FontSize*.2))
+            if(previous!=null && HasPositioningTab(previous,run))
             {
                 tabs.Add(new XElement(W+"tab",At("val","left"),At("pos",Math.Max(0,Tw(run.Left-left)))));
                 p.Add(new XElement(W+"r",new XElement(W+"tab")));
             }
-            p.Add(Run(run));
-            prevRight=run.Right;
+            // Short, naturally spaced Han labels need no Word-specific fitText
+            // feature. Keep fitting for condensed, mixed and justified text.
+            bool natural=centered && run.Text.Length<=16 &&
+                run.Text.All(ch=>ch>='\u3400' && ch<='\u9fff') &&
+                Math.Abs(run.Right-run.Left-run.FontSize*run.Text.Length)<.65;
+            p.Add(Run(run,natural));
+            previous=run;
         }
         if(tabs.HasElements) pr.Element(W+"autoSpaceDE").AddBeforeSelf(tabs);
         return p;
@@ -156,34 +184,40 @@ internal sealed partial class RuledWord : IDisposable
             // Preserve usable paragraph formatting for user-entered form data.
             props.Add(Val("vAlign","center"));
             tc.Add(new XElement(W+"p",new XElement(W+"pPr",new XElement(W+"spacing",At("before",0),At("after",0)),
-                new XElement(W+"ind",At("left",20)),new XElement(W+"rPr",Val("sz",20)))));
+                new XElement(W+"ind",At("left",20),At("firstLine",0),At("firstLineChars",0)),Val("jc","left"),
+                new XElement(W+"rPr",Val("sz",20)))));
             return tc;
         }
         // Word applies the largest top cell margin in a row to its neighbors
         // too. In a tall vertical merge that can hide adjacent cells entirely.
         // Padding inside this cell's own text flow has no effect on its peers.
-        props.Add(Val("vAlign","top"));
         var remaining=new HashSet<LayoutLine>(labels);
         var blocks=new List<Tuple<double,double,XElement>>();
         foreach(var child in cell.NestedTables)
             blocks.Add(Tuple.Create(child.Y[0],child.Y.Last(),Table(child,remaining,left)));
         var lines=Rows(remaining);
+        // A one-line label near the geometric midpoint is a native vertically
+        // centered cell, including vertical merges. No padding paragraph needed.
+        bool middle=blocks.Count==0 && lines.Count==1 &&
+            Math.Abs((lines[0].Top+lines[0].Height*.5)-(top+bottom)*.5)<=1.15;
+        props.Add(Val("vAlign",middle?"center":"top"));
         for(int i=0;i<lines.Count;i++)
         {
             var line=lines[i];
             double height = Math.Min(line.Height,Math.Max(1,(i+1<lines.Count?lines[i+1].Top:bottom)-line.Top));
-            var paragraph=Paragraph(line,left,height);
+            var paragraph=Paragraph(line,left,height,right);
             // Word can wrap the final fitted run as a unit when neighboring
             // short punctuation uses a different advance than the PDF. Allow
             // a small end overhang on lines already close to the cell edge.
-            if(right-line.Runs.Last().Right<line.FontSize)
+            if(right-line.Runs.Last().Right<line.FontSize &&
+                (string)paragraph.Element(W+"pPr").Element(W+"jc").Attribute(W+"val")=="left")
                 paragraph.Element(W+"pPr").Element(W+"ind").SetAttributeValue(W+"right",-Tw(Math.Min(5,line.FontSize*.5)));
             blocks.Add(Tuple.Create(line.Top,line.Top+height,paragraph));
         }
         double cursor=top;
         foreach(var block in blocks.OrderBy(b=>b.Item1))
         {
-            if(block.Item1>cursor+.05) tc.Add(Spacer(block.Item1-cursor));
+            if(!middle && block.Item1>cursor+.05) tc.Add(Spacer(block.Item1-cursor));
             tc.Add(block.Item3);
             cursor=Math.Max(cursor,block.Item1)+(block.Item2-block.Item1);
         }
@@ -212,6 +246,11 @@ internal sealed partial class RuledWord : IDisposable
         var borders=new XElement(W+"tblBorders");
         foreach(string side in new[]{"top","left","bottom","right","insideH","insideV"})
         {
+            if(backgroundForm)
+            {
+                borders.Add(new XElement(W+side,At("val","nil")));
+                continue;
+            }
             LayoutRule edge;
             bool hasEdge=table.OuterBorders.TryGetValue(side,out edge);
             double width=hasEdge?edge.Width:table.BorderWidth;
@@ -299,6 +338,11 @@ internal sealed partial class RuledWord : IDisposable
         var margin=new XElement(W+"pgMar");
         foreach(string side in new[]{"top","right","bottom","left","header","footer","gutter"})
             margin.SetAttributeValue(W+side,0);
+        // Source headers/footers are already positioned in the body. A signed
+        // one-twip margin prevents a reader's implicit header or footer from
+        // increasing that margin when it inherits a different Normal style.
+        margin.SetAttributeValue(W+"top",-1);
+        margin.SetAttributeValue(W+"bottom",-1);
         var section=new XElement(W+"sectPr",Val("type","nextPage"),size,margin);
         if(last) body.Add(section);
         else end.Element(W+"pPr").Add(section);

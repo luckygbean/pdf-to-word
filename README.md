@@ -1,11 +1,12 @@
 # PDF 转 Word
 
-Windows 10/11 x64 本地转换器。双击 `PDFtoWord.exe`，选择或拖入 PDF，选好转换方式后点击「导出 Word」。文件在本机处理，输出为新的 `.docx`。
+Windows 10/11 x64 本地转换器，输出为新的 `.docx`。桌面使用可从 [GitHub Releases](https://github.com/luckygbean/pdf-to-word/releases) 下载 `PDFtoWord.exe`，双击后拖入 PDF。Python 项目可以直接导入同一转换引擎。
 
 | 转换方式 | 适用场景 | Word 中的结果 |
 | --- | --- | --- |
 | 保留原版排版 | 打印、归档、复杂表格、公式、图章 | 以 PDF 实际显示尺寸逐页嵌入 PNG。每页图像可整体选中，文字、单元格和公式随图保存。 |
 | 可编辑文字和表格 | 招标文件、电子表单，以及能选中文字的报告或合同 | 含可识别线框表格时，按原稿分页重建正文和单元格。其他文档由本机桌面版 Microsoft Word 2013 或更新版本重排。 |
+| 保留表样并填写空栏 | 需要在不同电脑上填写同一张表 | 原有文字、印章和表线随底图固定。点进识别到的表格空栏即可输入。适用于至少有一张可识别矢量线框表格的 PDF。 |
 | 扫描文字识别 | 需要从扫描件提取文字 | 调用 Windows OCR，逐行生成可编辑段落。图形不参与文字重建，识别不到文字的页面以图片保留。 |
 
 ## 清晰度与兼容性
@@ -29,8 +30,28 @@ Word 的页面最长边为 55.88 厘米。遇到超大页时，保版会提示�
 ```powershell
 .\PDFtoWord.exe fixed "巡检记录.pdf" "巡检记录-保版.docx" 300 | Out-Host
 .\PDFtoWord.exe edit "巡检记录.pdf" "巡检记录-可编辑.docx" | Out-Host
+.\PDFtoWord.exe form "登记表.pdf" "登记表-填写.docx" | Out-Host
 .\PDFtoWord.exe ocr "扫描签收单.pdf" "扫描签收单-文字.docx" | Out-Host
 ```
+
+## 在 Python 中调用
+
+Windows x64、64 位 Python 3.9 或以上和 .NET Framework 4.8 可使用预编译的 wheel。pip 会一并安装 Python.NET。
+
+```powershell
+python -m pip install "https://github.com/luckygbean/pdf-to-word/releases/download/v0.1.0/pdfword_engine-0.1.0-py3-none-win_amd64.whl"
+```
+
+```python
+from pdfword import convert
+
+report = convert("登记表.pdf", "登记表-填写.docx", mode="form")
+print(report)
+```
+
+`convert(input_pdf, output_docx, mode="edit", dpi=300, password=None)` 接受字符串和 `pathlib.Path` 路径，返回转换报告，并保护已有的输出文件。可用模式为 `edit`（修改原文和表格）、`form`（保留原样并填表）、`fixed`（整页保版）和 `ocr`（识别扫描文字）。渲染分辨率可选 300、450、600 DPI。引擎转换失败会抛出 `pdfword.ConversionError`。
+
+Python 在当前进程中加载随包提供的 DLL，无需下载或启动桌面 EXE。通用 PDF 的 `edit` 重排路径需要本机 Microsoft Word，OCR 使用 Windows 已安装的识别语言。从源码安装可在具备下列构建依赖的 Windows 机器上运行 `python -m pip install .`。
 
 ## 从源码构建
 

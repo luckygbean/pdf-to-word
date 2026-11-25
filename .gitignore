@@ -2,8 +2,19 @@
 /bin/
 /obj/
 
-# Local Python regression-test bytecode
+# Python package build products and local bytecode
+/build/
+/dist/
+/python/*.egg-info/
+/python/pdfword/__pycache__/
 /tests/__pycache__/
+/.venv/
+
+# Private inputs, exported customer documents and local credentials
+/private/
+/outputs/
+/.env
+/.env.local
 
 # IntelliJ IDEA generates its folder/module metadata for this script-built project.
 /.idea/

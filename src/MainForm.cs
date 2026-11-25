@@ -15,12 +15,13 @@ internal sealed class MainForm : Form
     private bool busy;
     private string lastFile;
     private static readonly Color Ink = Color.FromArgb(27,42,57), Accent = Color.FromArgb(17,92,87);
-    private static readonly string[] Modes = { "fixed", "edit", "ocr" };
-    private static readonly string[] Suffix = { "原版排版", "可编辑", "识别文字" };
+    private static readonly string[] Modes = { "fixed", "edit", "ocr", "form" };
+    private static readonly string[] Suffix = { "原版排版", "可编辑", "识别文字", "填写版" };
     private static readonly string[] Hints = {
         "每页按原尺寸嵌入高清图片，保留字体、图章和表格位置。页内文字作为图片保存。",
         "含线框表格的文档按原页重建文字和可填写的表格，图章、扫描页保留图像；其他文档由桌面版 Word 重排。",
-        "用 Windows OCR 将扫描页识别为可编辑文字。表格和印章需对照原件，数字与标点建议校对。"
+        "用 Windows OCR 将扫描页识别为可编辑文字。表格和印章需对照原件，数字与标点建议校对。",
+        "原稿文字和边框作为底图，点击识别出的表格空栏即可填写。适合在不同电脑上分发表单。"
     };
 
     public MainForm(string initial)
@@ -43,7 +44,7 @@ internal sealed class MainForm : Form
         LabelAt("转换方式",30,159,240,24);
         Add(mode,30,186,324,31);
         mode.DropDownStyle = ComboBoxStyle.DropDownList;
-        mode.Items.AddRange(new object[]{"保留原版排版","可编辑文字和表格","扫描文字识别"});
+        mode.Items.AddRange(new object[]{"保留原版排版","可编辑文字和表格","扫描文字识别","保留表样并填写空栏"});
         mode.SelectedIndexChanged += delegate { UpdateMode(); };
         LabelAt("页面清晰度",374,159,160,24);
         Add(quality,374,186,260,31);
@@ -115,9 +116,10 @@ internal sealed class MainForm : Form
     private void UpdateMode()
     {
         hint.Text=Hints[mode.SelectedIndex];
-        quality.Enabled=!busy && mode.SelectedIndex==0;
-        password.Enabled=!busy && mode.SelectedIndex!=1;
-        if(mode.SelectedIndex==1) password.Clear();
+        quality.Enabled=!busy && (mode.SelectedIndex==0 || mode.SelectedIndex==3);
+        bool acceptsPassword=mode.SelectedIndex==0 || mode.SelectedIndex==2;
+        password.Enabled=!busy && acceptsPassword;
+        if(!acceptsPassword) password.Clear();
     }
     private void SetBusy(bool value)
     {

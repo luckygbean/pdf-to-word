@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdfword-engine"
+version = "0.1.0"
+description = "Local PDF to Word conversion for Windows x64"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["pythonnet>=3.0.3,<4"]
+classifiers = ["Operating System :: Microsoft :: Windows"]
+
+[project.urls]
+Repository = "https://github.com/luckygbean/pdf-to-word"
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+packages = ["pdfword"]

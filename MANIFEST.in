@@ -1,0 +1,3 @@
+include build.ps1 app.manifest
+recursive-include src *.cs *.ps1
+include tools/prepare-pdfium.ps1

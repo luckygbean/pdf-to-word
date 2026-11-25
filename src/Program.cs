@@ -27,7 +27,7 @@ internal static class Program
                 using (var notices=new StreamReader(stream,Encoding.UTF8)) Console.Write(notices.ReadToEnd());
                 return 0;
             }
-            if (args.Length<3 || args.Length>4) throw new ArgumentException("PDFtoWord.exe fixed|edit|ocr input.pdf output.docx [300|450|600]");
+            if (args.Length<3 || args.Length>4) throw new ArgumentException("PDFtoWord.exe fixed|edit|form|ocr input.pdf output.docx [300|450|600]");
             int dpi = args.Length==4 ? Int32.Parse(args[3]) : 300;
             if (dpi!=300 && dpi!=450 && dpi!=600) throw new ArgumentException("支持 300、450、600 DPI。");
             var message = Task.Run(()=>Converter.RunAsync(args[0],args[1],args[2],dpi,null,(i,n)=>{})).GetAwaiter().GetResult();

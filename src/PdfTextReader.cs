@@ -467,7 +467,7 @@ internal static partial class PdfTextReader
 
     private static class Api
     {
-        private const string Dll="pdfium.dll";
+        private const string Dll=NativePdfium.LibraryName;
         [DllImport(Dll)] internal static extern void FPDF_InitLibrary();
         [DllImport(Dll)] internal static extern void FPDF_DestroyLibrary();
         [DllImport(Dll)] internal static extern IntPtr FPDF_LoadMemDocument64(IntPtr data, ulong size, IntPtr password);

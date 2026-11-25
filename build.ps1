@@ -1,4 +1,4 @@
-param([string]$OutputDirectory = (Join-Path $PSScriptRoot 'bin'), [string]$WindowsMetadata)
+param([string]$OutputDirectory = (Join-Path $PSScriptRoot 'bin'), [string]$WindowsMetadata, [switch]$EngineOnly)
 $ErrorActionPreference = 'Stop'
 $framework = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319'
 $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/UnionMetadata'
@@ -15,14 +15,23 @@ $refs = @('System.Runtime.dll','System.Runtime.InteropServices.WindowsRuntime.dl
 $refs += '/reference:' + (Resolve-Path -LiteralPath $WindowsMetadata).Path
 $refs += @('PresentationCore.dll','WindowsBase.dll') | ForEach-Object { '/reference:' + (Join-Path $framework "WPF/$_") }
 $null = New-Item -ItemType Directory -Force -Path $OutputDirectory
-$exe = Join-Path $OutputDirectory 'PDFtoWord.exe'
-$sources = Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src') -Filter '*.cs' | ForEach-Object FullName
+$sources = Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src') -Filter '*.cs'
+if ($EngineOnly) {
+    $binary = Join-Path $OutputDirectory 'PDFtoWord.Engine.dll'
+    $target = @('/target:library')
+    $sources = $sources | Where-Object { $_.Name -notin @('Program.cs','MainForm.cs') }
+} else {
+    $binary = Join-Path $OutputDirectory 'PDFtoWord.exe'
+    $target = @('/target:winexe',"/win32manifest:$PSScriptRoot/app.manifest")
+    $sources = $sources | Where-Object { $_.Name -ne 'PythonApi.cs' }
+}
+$sourcePaths = $sources | ForEach-Object FullName
 $scriptResource = Join-Path $PSScriptRoot 'src/editable.ps1'
 $pdfiumDirectory = Join-Path $PSScriptRoot 'obj/pdfium'
 & (Join-Path $PSScriptRoot 'tools/prepare-pdfium.ps1') -OutputDirectory $pdfiumDirectory
 $resources = @("/resource:$scriptResource,editable.ps1",
     "/resource:$pdfiumDirectory/pdfium.dll,pdfium.dll",
     "/resource:$pdfiumDirectory/PDFium-NOTICES.txt,pdfium.NOTICES.txt")
-& (Join-Path $framework 'csc.exe') /nologo /codepage:65001 /optimize+ /target:winexe /platform:x64 "/win32manifest:$PSScriptRoot/app.manifest" "/out:$exe" $resources $refs $sources
+& (Join-Path $framework 'csc.exe') /nologo /codepage:65001 /optimize+ /platform:x64 $target "/out:$binary" $resources $refs $sourcePaths
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
-Write-Output $exe
+Write-Output $binary

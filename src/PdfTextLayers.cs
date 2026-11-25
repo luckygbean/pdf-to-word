@@ -10,7 +10,7 @@ internal static partial class PdfTextReader
 {
     private static class Paint
     {
-        private const string Dll="pdfium.dll";
+        private const string Dll=NativePdfium.LibraryName;
         [DllImport(Dll)] internal static extern int FPDFPageObj_SetIsActive(IntPtr obj,int active);
         [DllImport(Dll)] internal static extern IntPtr FPDFBitmap_CreateEx(int w,int h,int format,IntPtr buffer,int stride);
         [DllImport(Dll)] internal static extern int FPDFBitmap_FillRect(IntPtr bitmap,int left,int top,int w,int h,uint color);
